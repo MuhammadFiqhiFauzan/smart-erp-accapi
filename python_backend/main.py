@@ -2,8 +2,8 @@
 # Tujuan: FastAPI backend untuk validator, payments restore/SPPD, finance approval, RBAC, proof upload, dan helper export.
 # Caller: Next.js dashboard routes, browser uploads, dan service local AccAPI.
 # Dependensi: FastAPI, pandas/openpyxl, payments.py, template DOCX SPPD, Better Auth SQLite DB, filesystem JSON/output, auth utilities.
-# Main Functions: render_sppd_docx, payments_upload, payments_sppd_settings_get/save/upload, payments_finance_data, payments_finance_proof, payments_finance_update.
-# Side Effects: HTTP response/download, file upload/read/write, payments.json mutation, DOCX/XLSX generation, audit logging.
+# Main Functions: render_sppd_docx, payments_upload, payments_clear, payments_sppd_settings_get/save/upload, payments_finance_data, payments_finance_proof, payments_finance_update.
+# Side Effects: HTTP response/download, file upload/read/write, payments.json backup/mutation, DOCX/XLSX generation, audit logging.
 # =======================================================================================================
 # You requested:
 # 1) Engine reads program by channel using lookup "Data Channel by SUB" + data penjualan.
@@ -1489,6 +1489,20 @@ def save_payments_db(data: Dict[str, Any]) -> None:
     with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=True, indent=2)
     os.replace(tmp_path, PAYMENTS_DB_PATH)
+
+def empty_payments_db_preserving_config(db: Dict[str, Any]) -> Dict[str, Any]:
+    db = db if isinstance(db, dict) else {}
+    cleared: Dict[str, Any] = {
+        "lpb": {},
+        "submissions": {},
+        "drafts": {},
+        "finance_mappings": db.get("finance_mappings", {}),
+        "proofs": {},
+        "sppd_settings": db.get("sppd_settings", {}),
+    }
+    if "sppd_seq" in db:
+        cleared["sppd_seq"] = db.get("sppd_seq")
+    return cleared
 
 def normalize_lpb_no(no_lpb: str) -> str:
     return s(no_lpb).upper()
@@ -5791,7 +5805,7 @@ async def payments_update(request: Request):
     user = get_current_user(request)
     if not user:
         return JSONResponse(status_code=401, content={"ok": False, "error": "Unauthorized"})
-    if not user_has_permission(user, "sppd", "edit_settings"):
+    if not user_has_permission(user, "payments", "update"):
         return JSONResponse(status_code=403, content={"ok": False, "error": "Forbidden"})
     csrf_token = request.headers.get("X-CSRF-Token", "")
     if not validate_csrf_request(request, csrf_token):
@@ -6108,6 +6122,53 @@ async def payments_delete(request: Request):
     save_payments_db(db)
     append_audit_log(user, "payments_delete", "lpb", {"count": deleted, "samples": [s(n) for n in record_ids][:10]})
     return JSONResponse({"ok": True, "deleted": deleted})
+
+@app.post("/payments/clear")
+async def payments_clear(request: Request):
+    user = get_current_user(request)
+    if not user:
+        return JSONResponse(status_code=401, content={"ok": False, "error": "Unauthorized"})
+    if not is_admin_user(user):
+        return JSONResponse(status_code=403, content={"ok": False, "error": "Hanya admin yang bisa clear seluruh data payments."})
+    csrf_token = request.headers.get("X-CSRF-Token", "")
+    if not validate_csrf_request(request, csrf_token):
+        return JSONResponse(status_code=403, content={"ok": False, "error": "CSRF token invalid"})
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if s(payload.get("confirm", "")) != "CLEAR PAYMENTS":
+        return JSONResponse(status_code=400, content={"ok": False, "error": "Konfirmasi wajib tepat: CLEAR PAYMENTS"})
+    if not PAYMENTS_DB_PATH:
+        return JSONResponse(status_code=500, content={"ok": False, "error": "PAYMENTS_DB_PATH belum dikonfigurasi."})
+
+    db = load_payments_db()
+    before_counts = {
+        "lpb": len(db.get("lpb", {}) or {}),
+        "submissions": len(db.get("submissions", {}) or {}),
+        "drafts": len(db.get("drafts", {}) or {}),
+        "proofs": len(db.get("proofs", {}) or {}),
+    }
+    backup_name = ""
+    try:
+        os.makedirs(os.path.dirname(PAYMENTS_DB_PATH), exist_ok=True)
+        if os.path.exists(PAYMENTS_DB_PATH):
+            ts = pd.Timestamp.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = f"{PAYMENTS_DB_PATH}.backup_before_clear_{ts}"
+            import shutil
+            shutil.copy2(PAYMENTS_DB_PATH, backup_path)
+            backup_name = os.path.basename(backup_path)
+        save_payments_db(empty_payments_db_preserving_config(db))
+        append_audit_log(user, "payments_clear_all", "payments", {"backup": backup_name, "before": before_counts})
+        return JSONResponse({
+            "ok": True,
+            "cleared": before_counts,
+            "backup_file": backup_name,
+            "preserved": ["finance_mappings", "sppd_settings", "sppd_seq"],
+        })
+    except Exception as e:
+        append_error_log("payments_clear", e, {"user": user, "backup": backup_name})
+        return JSONResponse(status_code=500, content={"ok": False, "error": "Gagal clear data payments."})
 
 def _can_access_draft(user: str, draft: Dict[str, Any]) -> bool:
     if not user or not draft:
@@ -6672,7 +6733,7 @@ def payments_sppd_settings_get(request: Request):
     user = get_current_user(request)
     if not user:
         return JSONResponse(status_code=401, content={"ok": False, "error": "Unauthorized"})
-    if not user_has_permission(user, "payments", "view"):
+    if not user_has_permission(user, "sppd", "view"):
         return JSONResponse(status_code=403, content={"ok": False, "error": "Forbidden"})
     db = load_payments_db()
     settings = get_sppd_settings(db)
@@ -6693,7 +6754,7 @@ async def payments_sppd_settings_save(request: Request):
     user = get_current_user(request)
     if not user:
         return JSONResponse(status_code=401, content={"ok": False, "error": "Unauthorized"})
-    if not user_has_permission(user, "payments", "update"):
+    if not user_has_permission(user, "sppd", "edit_settings"):
         return JSONResponse(status_code=403, content={"ok": False, "error": "Forbidden"})
     csrf_token = request.headers.get("X-CSRF-Token", "")
     if not validate_csrf_request(request, csrf_token):

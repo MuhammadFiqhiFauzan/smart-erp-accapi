@@ -88,6 +88,7 @@ Side Effects: Tidak ada; dokumentasi sinkron terhadap flow kode aktif.
 - `UI(Summary) -> POST /summary/manual/email -> summary_manual_email() -> background email sender -> SMTP server`
 - `UI(Payments) -> GET /payments/data -> FastAPI validasi Better Auth SQLite session + RBAC -> load_payments_db() -> payments.json`
 - `UI(Payments) -> POST /payments/upload|manual/add|update|delete -> FastAPI validasi Better Auth SQLite session + RBAC -> auto-detect template LPB atau backup PAYMENTS export -> load/save payments.json`
+- `UI(Payments Admin Clear) -> POST /payments/clear -> FastAPI admin-only + CSRF -> backup payments.json -> kosongkan lpb/submissions/drafts/proofs sambil preserve finance_mappings/sppd_settings/sppd_seq`
 - `UI(Payments) -> POST /payments/cart/create -> payments_cart_create() -> selected LPB -> draft -> payments.json`
 - `UI(Payments SPPD Settings) -> GET/POST /payments/sppd/settings -> payments_sppd_settings_get/save() -> simpan `sppd_settings` dan nomor surat terakhir di payments.json`
 - `UI(Payments SPPD Excel) -> POST /payments/sppd/upload -> payments_sppd_upload() -> parse workbook -> update data record payments.json kecuali ajukan/gap/status workflow/draft/submission/SPPD No`
@@ -532,8 +533,8 @@ Side Effects: Tidak ada; dokumentasi sinkron terhadap flow kode aktif.
   - `SummaryManualPage`, `handleUsePrinciple`, `handleMasterUpload`, `handlePdfExtract`, `handleGenerate`, `handleSendEmail`
   - UI utama summary promo manual/AI yang bergantung pada FastAPI.
 - `app/(dashboard)/payments/page.tsx`
-  - `PaymentsPage`, `fetchData`, `handleUpload`, `handleManualAdd`, `handleSubmitCart`, `handleSaveBulk`, `handleDelete`
-  - UI master pembayaran/SPPD yang mengelola JSON store FastAPI dan dapat upload template LPB atau restore backup export PAYMENTS.
+  - `PaymentsPage`, `fetchData`, `handleUpload`, `handleManualAdd`, `handleSubmitCart`, `handleSaveBulk`, `handleDelete`, `handleClearAll`
+  - UI master pembayaran/SPPD yang mengelola JSON store FastAPI, upload template LPB atau restore backup export PAYMENTS, dan clear seluruh data payments untuk admin dengan backup otomatis.
 - `app/(dashboard)/payments/sppd/page.tsx`
   - `PaymentsSppdSettingsPage`, `fetchSettings`, `handleSave`, `handleUpload`, `getCsrfToken`
   - UI konfigurasi nomor surat terakhir, format nomor SPPD, tanggal fixed Jaminan, jatuh tempo, jumlah transfer per halaman, dan upload Excel data SPPD.
@@ -563,7 +564,7 @@ Side Effects: Tidak ada; dokumentasi sinkron terhadap flow kode aktif.
   - Script migrasi legacy JSON ke SQLite Python-side untuk users/principles/master items.
 - `python_backend/main.py`
   - `app = FastAPI(...)`, ratusan helper + endpoint
-  - Pusat backend Python: auth bridge, validator, summary, payments, finance, principle management, PPT, file output, dan HTML legacy pages.
+  - Pusat backend Python: auth bridge, validator, summary, payments restore/clear, finance, principle management, PPT, file output, dan HTML legacy pages.
 
 # Data & Config
 - Lokasi `.env*` / config utama:

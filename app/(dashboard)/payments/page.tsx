@@ -1,16 +1,17 @@
 "use client";
 
 /*
- * Tujuan: Halaman manajemen payments/SPPD untuk upload LPB/backup, entry manual, edit grid, dan submit cart.
+ * Tujuan: Halaman manajemen payments/SPPD untuk upload LPB/backup, entry manual, edit grid, clear data, dan submit cart.
  * Caller: Next.js App Router route `/payments`.
- * Dependensi: FastAPI payments endpoints, lucide-react, sonner.
- * Main Functions: PaymentsPage, fetchData, handleUpload, handleManualAdd, handleSubmitCart, handleSaveBulk, handleDelete.
- * Side Effects: HTTP call ke FastAPI, upload file Excel, update/delete payments.json melalui backend.
+ * Dependensi: FastAPI payments endpoints, Better Auth client, lucide-react, sonner.
+ * Main Functions: PaymentsPage, fetchData, handleUpload, handleManualAdd, handleSubmitCart, handleSaveBulk, handleDelete, handleClearAll.
+ * Side Effects: HTTP call ke FastAPI, upload file Excel, update/delete/clear payments.json melalui backend.
  */
 
 import { useEffect, useState, useMemo } from "react";
-import { Wallet, Upload, FileSpreadsheet, Send, Plus, Search, Save, Trash2, DownloadCloud, Landmark, FileText } from "lucide-react";
+import { Wallet, Upload, FileSpreadsheet, Send, Plus, Search, Save, Trash2, DownloadCloud, Landmark, FileText, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
+import { authClient } from "@/lib/auth-client";
 
 interface PaymentRecord {
     id?: string;
@@ -81,6 +82,8 @@ const api = {
 };
 
 export default function PaymentsPage() {
+    const { data: session } = authClient.useSession();
+    const isAdmin = (session?.user as { role?: string } | undefined)?.role === "admin";
     const [loading, setLoading] = useState(true);
     const [records, setRecords] = useState<PaymentRecord[]>([]);
     
@@ -97,6 +100,7 @@ export default function PaymentsPage() {
     const [isSubmitting, setIsSubmitting] = useState(false);
     const [isDeleting, setIsDeleting] = useState(false);
     const [isSaving, setIsSaving] = useState(false);
+    const [isClearing, setIsClearing] = useState(false);
 
     // Filters
     const [filters, setFilters] = useState<Record<string, string>>({});
@@ -221,6 +225,37 @@ export default function PaymentsPage() {
             } else toast.error(res.data.error || 'Gagal mengeksekusi penghapusan dari SQL.');
         } catch { toast.error('Network Error.'); } 
         finally { setIsDeleting(false); }
+    };
+
+    const handleClearAll = async () => {
+        if (!isAdmin) {
+            toast.error("Hanya admin yang bisa clear seluruh data payments.");
+            return;
+        }
+        const warning = "Clear seluruh data payments? Backup otomatis akan dibuat. Nomor SPPD terakhir, format SPPD, dan mapping finance tetap disimpan.";
+        if (!window.confirm(warning)) return;
+
+        const confirmText = window.prompt('Ketik persis "CLEAR PAYMENTS" untuk konfirmasi:');
+        if (confirmText !== "CLEAR PAYMENTS") {
+            toast.error("Konfirmasi tidak sesuai. Clear dibatalkan.");
+            return;
+        }
+
+        setIsClearing(true);
+        try {
+            const res = await api.post("/payments/clear", { confirm: confirmText });
+            if (res.data.ok) {
+                const cleared = res.data.cleared || {};
+                toast.success(`Data payments dibersihkan. Backup: ${res.data.backup_file || "-"}; LPB: ${cleared.lpb || 0}, draft: ${cleared.drafts || 0}, submission: ${cleared.submissions || 0}.`);
+                fetchData();
+            } else {
+                toast.error(res.data.error || "Gagal clear data payments.");
+            }
+        } catch {
+            toast.error("Network Error saat clear data payments.");
+        } finally {
+            setIsClearing(false);
+        }
     };
 
     const handleExport = () => window.open(`${API_BASE}/payments/export`, '_blank');
@@ -354,10 +389,15 @@ export default function PaymentsPage() {
                     <div className="flex items-center gap-2 text-emerald-400 font-semibold">
                         <Search size={18} /> Engine Filter Kolom Data
                     </div>
-                    <div className="flex gap-2 text-sm">
+                    <div className="flex flex-wrap gap-2 text-sm">
                         <button onClick={handleExport} className="flex items-center gap-2 bg-white/5 border border-white/10 text-slate-300 font-bold px-4 py-2.5 rounded-xl hover:bg-white/10 transition-colors">
                             <DownloadCloud size={16} /> Backup Tabel
                         </button>
+                        {isAdmin && (
+                            <button onClick={handleClearAll} disabled={isClearing} className="flex items-center gap-2 bg-red-500/10 border border-red-500/30 text-red-300 font-bold px-4 py-2.5 rounded-xl hover:bg-red-500/20 transition-colors disabled:opacity-50">
+                                <AlertTriangle size={16} /> Clear Semua
+                            </button>
+                        )}
                         <button onClick={handleDelete} disabled={isDeleting} className="flex items-center gap-2 bg-rose-500/10 border border-rose-500/20 text-rose-400 font-bold px-4 py-2.5 rounded-xl hover:bg-rose-500/20 transition-colors disabled:opacity-50">
                             <Trash2 size={16} /> Hapus Ceklis
                         </button>
