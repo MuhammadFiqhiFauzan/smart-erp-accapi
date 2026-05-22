@@ -196,15 +196,7 @@ export async function POST(request: Request, context: Context) {
       .filter((item) => {
         const ref = claimRefMap.get(item.id);
         if (!ref) return true;
-        return !(
-          ref.finalKwt ||
-          ref.finalSkp ||
-          ref.finalFp ||
-          ref.finalPc ||
-          ref.finalFoto ||
-          ref.finalRekap ||
-          ref.finalOthers
-        );
+        return !hasMinimalFinalChecklist(ref);
       })
       .map((item) => String(item.noSurat || "").trim());
 

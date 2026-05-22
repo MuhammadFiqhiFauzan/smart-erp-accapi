@@ -3,7 +3,7 @@
 import { createClient } from "@libsql/client";
 import { mkdirSync } from "node:fs";
 
-const databaseUrl = process.env.DATABASE_URL || "file:/app/data/sqlite.db";
+const databaseUrl = process.env.DATABASE_URL || "file:sqlite.db";
 const filePath = databaseUrl.startsWith("file:")
   ? databaseUrl.slice("file:".length)
   : null;
@@ -153,9 +153,18 @@ const statements = [
     fp INTEGER NOT NULL DEFAULT 0,
     pc INTEGER NOT NULL DEFAULT 0,
     foto INTEGER NOT NULL DEFAULT 0,
-    rekap INTEGER NOT NULL DEFAULT 0,
+        rekap INTEGER NOT NULL DEFAULT 0,
     others INTEGER NOT NULL DEFAULT 0,
     others_text TEXT,
+    final_kwt INTEGER NOT NULL DEFAULT 0,
+    final_skp INTEGER NOT NULL DEFAULT 0,
+    final_fp INTEGER NOT NULL DEFAULT 0,
+    final_pc INTEGER NOT NULL DEFAULT 0,
+    final_foto INTEGER NOT NULL DEFAULT 0,
+    final_rekap INTEGER NOT NULL DEFAULT 0,
+    final_others INTEGER NOT NULL DEFAULT 0,
+    final_others_text TEXT,
+    final_completeness_note TEXT,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     FOREIGN KEY (batch_id) REFERENCES off_batch(id)

@@ -34,7 +34,28 @@ export function paymentsHaveProofs(payments: OffPaymentRow[]) {
   );
 }
 
-export function computeBatchProgress(batch: OffBatchRow): number {
+type BatchProgressSource = Pick<
+  OffBatchRow,
+  | "status"
+  | "financeStatus"
+  | "finalStatus"
+  | "omStatus"
+  | "claimStatus"
+  | "smStatus"
+>;
+
+type FinalChecklistSource = Pick<
+  OffItemRow,
+  | "finalKwt"
+  | "finalSkp"
+  | "finalFp"
+  | "finalPc"
+  | "finalFoto"
+  | "finalRekap"
+  | "finalOthers"
+>;
+
+export function computeBatchProgress(batch: BatchProgressSource): number {
   const status = batch.status;
   const financeStatus = batch.financeStatus;
   const finalStatus = batch.finalStatus;
@@ -70,7 +91,7 @@ export function computeBatchProgress(batch: OffBatchRow): number {
   return 10;
 }
 
-export function hasMinimalFinalChecklist(item: OffItemRow): boolean {
+export function hasMinimalFinalChecklist(item: FinalChecklistSource): boolean {
   return Boolean(
     item.finalKwt ||
     item.finalSkp ||

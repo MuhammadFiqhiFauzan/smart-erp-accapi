@@ -31,6 +31,10 @@ import {
   offPaymentMethods,
   offPrinciples,
 } from "@/lib/off-program-control/constants";
+import {
+  computeBatchProgress,
+  hasMinimalFinalChecklist,
+} from "@/lib/off-program-control/workflow";
 import { authClient } from "@/lib/auth-client";
 import {
   canPerformOffAction,
@@ -176,6 +180,15 @@ type OffApiItem = {
   rekap: boolean;
   others: boolean;
   othersText: string | null;
+  finalKwt?: boolean | null;
+  finalSkp?: boolean | null;
+  finalFp?: boolean | null;
+  finalPc?: boolean | null;
+  finalFoto?: boolean | null;
+  finalRekap?: boolean | null;
+  finalOthers?: boolean | null;
+  finalOthersText?: string | null;
+  finalCompletenessNote?: string | null;
 };
 
 type OffNotificationPreview = {
@@ -493,39 +506,8 @@ async function parseJsonResponse(response: Response) {
 }
 
 function computeUiBatchProgress(batch: OffApiBatch): number {
-  const status = batch.status;
-  const financeStatus = batch.financeStatus;
-  const finalStatus = batch.finalStatus;
-
-  if (status === "Cancelled" || status === "Cancelled by OM") return 0;
-  if (finalStatus === "Completed" || status === "Completed") return 100;
-  if (finalStatus === "Incomplete Documents") return 90;
-  if (finalStatus === "Waiting Claim Final Verification" || status === "Paid")
-    return 85;
-  if (financeStatus === "Partial Paid" || status === "Partial Paid") return 75;
-  if (
-    batch.omStatus === "Approved" &&
-    ["Waiting Payment", "Not Started"].includes(financeStatus)
-  )
-    return 65;
-  if (
-    batch.claimStatus === "Approved" ||
-    status === "Claim Approved" ||
-    status === "Ready for OM" ||
-    status === "Waiting OM"
-  )
-    return 50;
-  if (batch.smStatus === "Approved by SM" || status === "Approved by SM")
-    return 35;
-  if (status === "Submitted to SM" || batch.smStatus === "Waiting Review")
-    return 20;
-  if (
-    status === "Draft" ||
-    status === "Returned by SM" ||
-    status === "Returned by Claim"
-  )
-    return 10;
-  return 10;
+  // OffApiBatch is a public DTO; computeBatchProgress only needs workflow status fields.
+  return computeBatchProgress(batch);
 }
 
 function ProgressBar({
@@ -3177,21 +3159,14 @@ function SalesManagerDashboard({ offRole }: OffDashboardProps) {
 function ClaimDashboard({ offRole }: OffDashboardProps) {
   const canReviewClaim = canPerformOffAction(offRole, "claim_review");
   const canFinalClaim = canPerformOffAction(offRole, "claim_final");
-  const [claimMenu, setClaimMenu] = useState<"pengecekan" | "monitoring">(
-    "pengecekan",
-  );
   const [claimView, setClaimView] = useState<
     "hub" | "after-sm" | "after-finance"
   >("hub");
   const [allClaimBatches, setAllClaimBatches] = useState<OffApiBatch[]>([]);
-  const [monitoringClaimSearch, setMonitoringClaimSearch] = useState("");
-  const [monitoringClaimStatusFilter, setMonitoringClaimStatusFilter] =
-    useState("");
   const [claimBatches, setClaimBatches] = useState<OffApiBatch[]>([]);
   const [claimSearch, setClaimSearch] = useState("");
   const [finalBatches, setFinalBatches] = useState<OffApiBatch[]>([]);
   const [finalClaimSearch, setFinalClaimSearch] = useState("");
-  const [finalHistory, setFinalHistory] = useState<OffApiBatch[]>([]);
   const [selectedBatch, setSelectedBatch] = useState<OffApiBatch | null>(null);
   const [selectedItems, setSelectedItems] = useState<OffApiItem[]>([]);
   const [selectedFinalBatch, setSelectedFinalBatch] =
@@ -3338,19 +3313,15 @@ function ClaimDashboard({ offRole }: OffDashboardProps) {
         items.map((item) => [
           item.id,
           {
-            finalKwt: Boolean((item as Record<string, unknown>).finalKwt),
-            finalSkp: Boolean((item as Record<string, unknown>).finalSkp),
-            finalFp: Boolean((item as Record<string, unknown>).finalFp),
-            finalPc: Boolean((item as Record<string, unknown>).finalPc),
-            finalFoto: Boolean((item as Record<string, unknown>).finalFoto),
-            finalRekap: Boolean((item as Record<string, unknown>).finalRekap),
-            finalOthers: Boolean((item as Record<string, unknown>).finalOthers),
-            finalOthersText: String(
-              (item as Record<string, unknown>).finalOthersText || "",
-            ),
-            finalCompletenessNote: String(
-              (item as Record<string, unknown>).finalCompletenessNote || "",
-            ),
+            finalKwt: Boolean(item.finalKwt),
+            finalSkp: Boolean(item.finalSkp),
+            finalFp: Boolean(item.finalFp),
+            finalPc: Boolean(item.finalPc),
+            finalFoto: Boolean(item.finalFoto),
+            finalRekap: Boolean(item.finalRekap),
+            finalOthers: Boolean(item.finalOthers),
+            finalOthersText: item.finalOthersText || "",
+            finalCompletenessNote: item.finalCompletenessNote || "",
           },
         ]),
       ),
@@ -3377,35 +3348,18 @@ function ClaimDashboard({ offRole }: OffDashboardProps) {
       const finalQueue = rows.filter(isFinalQueueBatch);
       setClaimBatches(queue);
       setFinalBatches(finalQueue);
-      setFinalHistory(
-        rows.filter(
-          (batch) =>
-            batch.finalStatus === "Completed" ||
-            batch.finalStatus === "Need Correction from Finance" ||
-            batch.status === "Completed" ||
-            batch.status === "Returned to Finance",
-        ),
-      );
-      const nextBatch = queue[0] || null;
-      const nextFinalBatch = finalQueue[0] || null;
-      setSelectedBatch(nextBatch);
-      setSelectedFinalBatch(nextFinalBatch);
-      if (nextBatch) {
-        await loadClaimDetail(nextBatch);
-      } else {
-        setSelectedItems([]);
-        setClaimSubmittedDate("");
-        setClaimDeadline("");
-        setClaimNote("");
-      }
-      if (nextFinalBatch) {
-        await loadFinalDetail(nextFinalBatch);
-      } else {
-        setSelectedFinalItems([]);
-        setFinalClaimRefs({});
-        setSelectedFinalPayments([]);
-        setFinalClaimNote("");
-      }
+
+      setSelectedBatch(null);
+      setSelectedFinalBatch(null);
+      setSelectedItems([]);
+      setClaimSubmittedDate("");
+      setClaimDeadline("");
+      setClaimNote("");
+      setSelectedFinalItems([]);
+      setFinalClaimRefs({});
+      setFinalChecklist({});
+      setSelectedFinalPayments([]);
+      setFinalClaimNote("");
     } catch (error) {
       setClaimMessage(
         error instanceof Error
@@ -3425,8 +3379,11 @@ function ClaimDashboard({ offRole }: OffDashboardProps) {
   }, []);
 
   const selectClaimBatch = async (batch: OffApiBatch) => {
-    setSelectedBatch(batch);
+    setSelectedBatch(null);
     setSelectedItems([]);
+    setClaimSubmittedDate("");
+    setClaimDeadline("");
+    setClaimNote("");
     setClaimMessage("");
     try {
       await loadClaimDetail(batch);
@@ -3440,9 +3397,12 @@ function ClaimDashboard({ offRole }: OffDashboardProps) {
   };
 
   const selectFinalBatch = async (batch: OffApiBatch) => {
-    setSelectedFinalBatch(batch);
+    setSelectedFinalBatch(null);
     setSelectedFinalItems([]);
     setSelectedFinalPayments([]);
+    setFinalClaimRefs({});
+    setFinalChecklist({});
+    setFinalClaimNote("");
     setClaimMessage("");
     try {
       await loadFinalDetail(batch);
@@ -3616,15 +3576,15 @@ function ClaimDashboard({ offRole }: OffDashboardProps) {
       .filter((item) => {
         const cl = finalChecklist[item.id];
         if (!cl) return true;
-        return !(
-          cl.finalKwt ||
-          cl.finalSkp ||
-          cl.finalFp ||
-          cl.finalPc ||
-          cl.finalFoto ||
-          cl.finalRekap ||
-          cl.finalOthers
-        );
+        return !hasMinimalFinalChecklist({
+          finalKwt: cl.finalKwt,
+          finalSkp: cl.finalSkp,
+          finalFp: cl.finalFp,
+          finalPc: cl.finalPc,
+          finalFoto: cl.finalFoto,
+          finalRekap: cl.finalRekap,
+          finalOthers: cl.finalOthers,
+        });
       });
 
     if (missingChecklist.length > 0) {
@@ -3692,12 +3652,33 @@ function ClaimDashboard({ offRole }: OffDashboardProps) {
     }
   };
 
-  const filteredClaimBatches = filterBatchesBySearch(claimBatches, claimSearch);
+  const claimInitialMonitoringBatches = allClaimBatches.filter((batch) => {
+    const claimStatus = String(batch.claimStatus || "");
+    const status = String(batch.status || "");
+    const isRelevant =
+      (batch.smStatus === "Approved by SM" || claimStatus !== "Not Started") &&
+      ["Waiting Review", "Approved", "Returned", "Returned by Claim"].some(
+        (value) => claimStatus === value || status === value,
+      );
+    return isRelevant && filterBatchesBySearch([batch], claimSearch).length > 0;
+  });
 
-  const filteredFinalBatches = filterBatchesBySearch(
-    finalBatches,
-    finalClaimSearch,
-  );
+  const isFinalClaimProcessable = (batch: OffApiBatch) =>
+    batch.financeStatus === "Paid" &&
+    ["Waiting Claim Final Verification", "Incomplete Documents"].includes(
+      batch.finalStatus,
+    );
+
+  const finalClaimMonitoringBatches = allClaimBatches.filter((batch) => {
+    const isRelevant =
+      (batch.financeStatus === "Paid" &&
+        batch.finalStatus === "Waiting Claim Final Verification") ||
+      batch.finalStatus === "Incomplete Documents" ||
+      batch.finalStatus === "Completed";
+    return (
+      isRelevant && filterBatchesBySearch([batch], finalClaimSearch).length > 0
+    );
+  });
 
   if (claimView === "hub") {
     return (
@@ -3768,12 +3749,26 @@ function ClaimDashboard({ offRole }: OffDashboardProps) {
 
   return (
     <div className="space-y-6">
-      <button
-        onClick={() => setClaimView("hub")}
-        className="inline-flex rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-bold text-slate-200 hover:bg-white/10"
-      >
-        Kembali ke Dashboard Claim
-      </button>
+      <div className="flex flex-wrap gap-3">
+        <button
+          onClick={() => setClaimView("hub")}
+          className="inline-flex rounded-xl border border-white/10 bg-white/5 px-4 py-2.5 text-sm font-bold text-slate-200 hover:bg-white/10"
+        >
+          Kembali ke Dashboard Claim
+        </button>
+        <button
+          onClick={() => setClaimView("after-sm")}
+          className={`rounded-xl border px-4 py-2.5 text-sm font-bold ${claimView === "after-sm" ? "border-teal-500 bg-teal-600 text-white" : "border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"}`}
+        >
+          Validasi Setelah SM
+        </button>
+        <button
+          onClick={() => setClaimView("after-finance")}
+          className={`rounded-xl border px-4 py-2.5 text-sm font-bold ${claimView === "after-finance" ? "border-teal-500 bg-teal-600 text-white" : "border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"}`}
+        >
+          Validasi Setelah Keuangan
+        </button>
+      </div>
       <div className="rounded-2xl border border-white/10 bg-[#1a1c23]/60 p-5 shadow-xl">
         <h2 className="text-xl font-black text-white">
           {claimView === "after-sm"
@@ -3791,8 +3786,8 @@ function ClaimDashboard({ offRole }: OffDashboardProps) {
         nyata sebelum menyetujui.
       </InfoNote>
       {claimView === "after-sm" && (
-        <div className="grid grid-cols-1 xl:grid-cols-[0.75fr_1.25fr] gap-6">
-          <Panel title="Menunggu Validasi Claim" icon={FileCheck2}>
+        <>
+          <Panel title="Monitoring Validasi Setelah SM" icon={ScrollText}>
             <div className="mb-4">
               <MonitoringSearch
                 value={claimSearch}
@@ -3800,385 +3795,270 @@ function ClaimDashboard({ offRole }: OffDashboardProps) {
                 placeholder="Cari No Pengajuan, principle, kode, atau status Claim..."
               />
             </div>
-
-            <div className="space-y-3">
-              {isLoading && (
-                <p className="text-sm text-slate-400">
-                  Memuat antrean Claim...
-                </p>
-              )}
-
-              {!isLoading && filteredClaimBatches.length === 0 && (
-                <p className="text-sm text-slate-400">
-                  Belum ada batch yang disetujui SM dan menunggu Claim.
-                </p>
-              )}
-
-              {filteredClaimBatches.map((batch) => {
-                const summary = batch.summary || {
-                  totalRows: 0,
-                  totalNominal: 0,
-                };
-
-                return (
-                  <button
-                    key={batch.id}
-                    onClick={() => selectClaimBatch(batch)}
-                    className={`w-full rounded-xl border p-4 text-left transition-colors ${
-                      selectedBatch?.id === batch.id
-                        ? "border-teal-500/40 bg-teal-500/10"
-                        : "border-white/10 bg-black/30 hover:bg-white/[0.04]"
-                    }`}
-                  >
-                    <p className="font-mono text-sm font-bold text-white">
-                      {batch.noPengajuan}
-                    </p>
-
-                    <p className="mt-1 text-sm text-slate-300">
-                      {batch.principleName}{" "}
-                      <span className="font-mono text-teal-300">
-                        ({batch.principleCode})
-                      </span>
-                    </p>
-
-                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-400">
-                      <span>
-                        Baris:{" "}
-                        <b className="text-slate-200">
-                          {summary.totalRows || summary.rowCount || 0}
-                        </b>
-                      </span>
-
-                      <span>
-                        Total:{" "}
-                        <b className="text-emerald-300">
+            <div className="overflow-x-auto rounded-xl border border-white/10">
+              <table className="w-full min-w-[1300px] text-left text-sm">
+                <thead className="bg-black/50 text-xs uppercase tracking-wider text-slate-500">
+                  <tr>
+                    {[
+                      "No Pengajuan",
+                      "Principle",
+                      "Kode Principle",
+                      "Total Nominal",
+                      "Status Claim",
+                      "Status OM",
+                      "Status Finance",
+                      "Status Final",
+                      "Progress %",
+                      "Claim Note",
+                      "Updated At",
+                      "Aksi",
+                    ].map((header) => (
+                      <th key={header} className="px-3 py-3 font-bold">
+                        {header}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {claimInitialMonitoringBatches.map((batch) => {
+                    const canProcess = isClaimQueueBatch(batch);
+                    return (
+                      <tr key={batch.id} className="hover:bg-white/[0.03]">
+                        <td className="px-3 py-3 font-mono text-slate-200">
+                          {batch.noPengajuan}
+                        </td>
+                        <td className="px-3 py-3 text-slate-300">
+                          {batch.principleName}
+                        </td>
+                        <td className="px-3 py-3 font-mono text-teal-300">
+                          {batch.principleCode}
+                        </td>
+                        <td className="px-3 py-3 text-right font-mono text-emerald-300">
                           Rp{" "}
-                          {Number(summary.totalNominal || 0).toLocaleString(
-                            "id-ID",
-                          )}
-                        </b>
-                      </span>
-
-                      <span>
-                        SM:{" "}
-                        <b className="text-emerald-300">
-                          {displayStatusLabel(batch.smStatus)}
-                        </b>
-                      </span>
-
-                      <span>
-                        Claim:{" "}
-                        <b className="text-sky-300">
+                          {Number(
+                            batch.summary?.totalNominal || 0,
+                          ).toLocaleString("id-ID")}
+                        </td>
+                        <td className="px-3 py-3 text-slate-300">
                           {displayStatusLabel(batch.claimStatus)}
-                        </b>
-                      </span>
-
-                      <span>
-                        Deadline:{" "}
-                        <b className="text-slate-200">
-                          {batch.claimDeadline || "-"}
-                        </b>
-                      </span>
-                    </div>
-                  </button>
-                );
-              })}
+                        </td>
+                        <td className="px-3 py-3 text-slate-300">
+                          {displayStatusLabel(batch.omStatus)}
+                        </td>
+                        <td className="px-3 py-3 text-slate-300">
+                          {displayStatusLabel(batch.financeStatus)}
+                        </td>
+                        <td className="px-3 py-3 text-slate-300">
+                          {displayStatusLabel(batch.finalStatus)}
+                        </td>
+                        <td className="px-3 py-3 min-w-[130px]">
+                          <ProgressBar value={computeUiBatchProgress(batch)} />
+                        </td>
+                        <td className="px-3 py-3 text-slate-400">
+                          {batch.claimNote || "-"}
+                        </td>
+                        <td className="px-3 py-3 text-slate-400">
+                          {formatDateDisplay(batch.updatedAt)}
+                        </td>
+                        <td className="px-3 py-3">
+                          <button
+                            onClick={() => selectClaimBatch(batch)}
+                            className={`rounded-lg border px-3 py-1.5 text-xs font-bold ${canProcess ? "border-teal-500 bg-teal-600 text-white hover:bg-teal-500" : "border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"}`}
+                          >
+                            {canProcess ? "Proses" : "Lihat"}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {!isLoading && claimInitialMonitoringBatches.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={12}
+                        className="px-3 py-6 text-center text-sm text-slate-500"
+                      >
+                        Belum ada data validasi Claim awal untuk ditampilkan.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </Panel>
 
-          <div className="space-y-6">
-            <Panel title="Detail Validasi Claim" icon={FileCheck2}>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <Field
-                  label="No Pengajuan"
-                  value={selectedBatch?.noPengajuan || "-"}
-                />
-                <Field
-                  label="Gelombang"
-                  value={selectedBatch?.gelombang || "-"}
-                />
-                <Field
-                  label="Principle"
-                  value={selectedBatch?.principleName || "-"}
-                />
-                <Field
-                  label="Kode Principle"
-                  value={selectedBatch?.principleCode || "-"}
-                />
-                <Field
-                  label="Bulan/Tahun"
-                  value={
-                    selectedBatch
-                      ? `${selectedBatch.bulan}/${selectedBatch.tahun}`
-                      : "-"
-                  }
-                />
-                <Field
-                  label="Supervisor"
-                  value={selectedBatch?.supervisorName || "-"}
-                />
-                <Field
-                  label="Total Nominal"
-                  value={`Rp ${totalNominal.toLocaleString("id-ID")}`}
-                />
-                <Field
-                  label="Status SM"
-                  value={displayStatusLabel(selectedBatch?.smStatus)}
-                />
-                <Field
-                  label="Status Claim"
-                  value={displayStatusLabel(selectedBatch?.claimStatus)}
-                />
+          {selectedBatch && (
+            <div className="space-y-6">
+              <div className="flex justify-end">
+                <button
+                  onClick={() => {
+                    setSelectedBatch(null);
+                    setSelectedItems([]);
+                    setClaimSubmittedDate("");
+                    setClaimDeadline("");
+                    setClaimNote("");
+                  }}
+                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-slate-200 hover:bg-white/10"
+                >
+                  Tutup Detail
+                </button>
               </div>
-              <div className="mt-5 overflow-x-auto rounded-xl border border-white/10">
-                <table className="w-full min-w-[1150px] text-left text-sm">
-                  <thead className="border-b border-white/10 bg-black/50 text-xs uppercase tracking-wider text-slate-500">
-                    <tr>
-                      {[
-                        "No",
-                        "No Surat",
-                        "Nama Program",
-                        "Periode",
-                        "Toko",
-                        "Barang",
-                        "Nominal",
-                        "Cara Bayar",
-                        "Tipe",
-                        "Deadline",
-                      ].map((header) => (
-                        <th key={header} className="px-3 py-3 font-bold">
-                          {header}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5">
-                    {selectedItems.map((item, index) => (
-                      <tr
-                        key={item.id || `${item.noSurat}-${index}`}
-                        className="hover:bg-white/[0.03]"
-                      >
-                        <td className="px-3 py-3 font-mono text-slate-300">
-                          {item.itemNo || index + 1}
-                        </td>
-                        <td className="px-3 py-3 font-mono text-slate-200">
-                          {item.noSurat || "-"}
-                        </td>
-                        <td className="px-3 py-3 min-w-[180px] text-slate-200">
-                          {item.namaProgram || "-"}
-                        </td>
-                        <td className="px-3 py-3 text-slate-300">
-                          {item.periode || "-"}
-                        </td>
-                        <td className="px-3 py-3 min-w-[140px] text-slate-300">
-                          {item.toko || "-"}
-                        </td>
-                        <td className="px-3 py-3 text-slate-300">
-                          {item.barang || "-"}
-                        </td>
-                        <td className="px-3 py-3 text-right font-mono text-emerald-300">
-                          Rp {Number(item.nominal || 0).toLocaleString("id-ID")}
-                        </td>
-                        <td className="px-3 py-3 text-slate-300">
-                          {item.caraBayar || "-"}
-                        </td>
-                        <td className="px-3 py-3 text-slate-300">
-                          {item.type || "-"}
-                        </td>
-                        <td className="px-3 py-3 text-slate-300">
-                          {item.deadline || "-"}
-                        </td>
-                      </tr>
-                    ))}
-                    {!isLoading && selectedItems.length === 0 && (
-                      <tr>
-                        <td
-                          colSpan={10}
-                          className="px-3 py-6 text-center text-sm text-slate-500"
-                        >
-                          Pilih batch untuk melihat item.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </Panel>
-
-            <Panel title="Kelengkapan Awal dari Supervisor" icon={ListChecks}>
-              <p className="mb-4 text-sm text-slate-400">
-                Kelengkapan dari Supervisor adalah informasi awal. Claim wajib
-                melakukan verifikasi nyata sebelum menyetujui.
-              </p>
-              <div className="overflow-x-auto rounded-xl border border-white/10">
-                <table className="w-full min-w-[1200px] text-left text-sm">
-                  <thead className="border-b border-white/10 bg-black/50 text-xs uppercase tracking-wider text-slate-500">
-                    <tr>
-                      {[
-                        "No",
-                        "No Surat",
-                        "Nama Program",
-                        "Toko",
-                        "KWT",
-                        "SKP",
-                        "FP",
-                        "PC",
-                        "Foto",
-                        "Rekap",
-                        "Lainnya",
-                        "Keterangan Lainnya",
-                      ].map((header) => (
-                        <th key={header} className="px-3 py-3 font-bold">
-                          {header}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5">
-                    {selectedItems.map((item, index) => (
-                      <tr
-                        key={item.id || `${item.noSurat}-${index}`}
-                        className="hover:bg-white/[0.03]"
-                      >
-                        <td className="px-3 py-3 font-mono text-slate-300">
-                          {item.itemNo || index + 1}
-                        </td>
-                        <td className="px-3 py-3 font-mono text-slate-200">
-                          {item.noSurat || "-"}
-                        </td>
-                        <td className="px-3 py-3 min-w-[180px] text-slate-200">
-                          {item.namaProgram || "-"}
-                        </td>
-                        <td className="px-3 py-3 min-w-[140px] text-slate-300">
-                          {item.toko || "-"}
-                        </td>
-                        <td className="px-3 py-3">
-                          <ReadOnlyPresenceBadge value={item.kwt} />
-                        </td>
-                        <td className="px-3 py-3">
-                          <ReadOnlyPresenceBadge value={item.skp} />
-                        </td>
-                        <td className="px-3 py-3">
-                          <ReadOnlyPresenceBadge value={item.fp} />
-                        </td>
-                        <td className="px-3 py-3">
-                          <ReadOnlyPresenceBadge value={item.pc} />
-                        </td>
-                        <td className="px-3 py-3">
-                          <ReadOnlyPresenceBadge value={item.foto} />
-                        </td>
-                        <td className="px-3 py-3">
-                          <ReadOnlyPresenceBadge value={item.rekap} />
-                        </td>
-                        <td className="px-3 py-3">
-                          <ReadOnlyPresenceBadge value={item.others} />
-                        </td>
-                        <td className="px-3 py-3 min-w-[180px] text-slate-300">
-                          {item.othersText || "-"}
-                        </td>
-                      </tr>
-                    ))}
-                    {!isLoading && selectedItems.length === 0 && (
-                      <tr>
-                        <td
-                          colSpan={12}
-                          className="px-3 py-6 text-center text-sm text-slate-500"
-                        >
-                          Belum ada item batch yang bisa ditampilkan.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </Panel>
-
-            <Panel title="Form Validasi Claim" icon={ClipboardCheck}>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <DateField
-                  label="Tanggal Diajukan"
-                  value={claimSubmittedDate}
-                  onChange={setClaimSubmittedDate}
-                />
-                <DateField
-                  label="Deadline Claim"
-                  value={claimDeadline}
-                  onChange={setClaimDeadline}
-                />
-                <label className="block">
-                  <span className="text-xs text-slate-500 font-semibold">
-                    Status Kelengkapan Claim
-                  </span>
-                  <select
-                    value={completenessStatus}
-                    onChange={(event) =>
-                      setCompletenessStatus(event.target.value)
-                    }
-                    className="mt-1 w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2.5 text-sm text-slate-200 outline-none focus:border-teal-500/50"
-                  >
-                    <option className="bg-[#1a1c23]" value="Aman">
-                      Aman
-                    </option>
-                    <option className="bg-[#1a1c23]" value="Kurang">
-                      Kurang
-                    </option>
-                    <option className="bg-[#1a1c23]" value="Perlu Revisi">
-                      Perlu Revisi
-                    </option>
-                  </select>
-                </label>
-              </div>
-              <div className="mt-4">
-                <label className="block">
-                  <span className="text-xs text-slate-500 font-semibold">
-                    Catatan Claim
-                  </span>
-                  <textarea
-                    value={claimNote}
-                    onChange={(event) => setClaimNote(event.target.value)}
-                    rows={4}
-                    className="mt-1 w-full resize-none rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-teal-500/50"
+              <Panel title="Detail Validasi Claim" icon={FileCheck2}>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <Field
+                    label="No Pengajuan"
+                    value={selectedBatch.noPengajuan}
                   />
-                </label>
-              </div>
-              {claimMessage && (
-                <div className="mt-4 rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-slate-300">
-                  {claimMessage}
+                  <Field
+                    label="Principle"
+                    value={selectedBatch.principleName}
+                  />
+                  <Field
+                    label="Kode Principle"
+                    value={selectedBatch.principleCode}
+                  />
+                  <Field
+                    label="Status Claim"
+                    value={displayStatusLabel(selectedBatch.claimStatus)}
+                  />
+                  <Field
+                    label="Total Nominal"
+                    value={`Rp ${totalNominal.toLocaleString("id-ID")}`}
+                  />
                 </div>
-              )}
-              {canReviewClaim ? (
-                <div className="mt-5 flex flex-wrap gap-3">
-                  <button
-                    onClick={returnByClaim}
-                    disabled={!selectedBatch || isActionLoading}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2.5 text-sm font-bold text-rose-300 transition-colors hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Kembalikan untuk Koreksi
-                  </button>
-                  <button
-                    onClick={approveByClaim}
-                    disabled={!selectedBatch || isActionLoading}
-                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-500 bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
-                  >
-                    Setujui Claim
-                  </button>
+                <div className="mt-5 overflow-x-auto rounded-xl border border-white/10">
+                  <table className="w-full min-w-[900px] text-left text-sm">
+                    <thead className="border-b border-white/10 bg-black/50 text-xs uppercase tracking-wider text-slate-500">
+                      <tr>
+                        {[
+                          "No",
+                          "No Surat",
+                          "Nama Program",
+                          "Toko",
+                          "Nominal",
+                          "Deadline",
+                        ].map((header) => (
+                          <th key={header} className="px-3 py-3 font-bold">
+                            {header}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {selectedItems.map((item, index) => (
+                        <tr key={item.id} className="hover:bg-white/[0.03]">
+                          <td className="px-3 py-3 font-mono text-slate-300">
+                            {item.itemNo || index + 1}
+                          </td>
+                          <td className="px-3 py-3 font-mono text-slate-200">
+                            {item.noSurat || "-"}
+                          </td>
+                          <td className="px-3 py-3 text-slate-200">
+                            {item.namaProgram || "-"}
+                          </td>
+                          <td className="px-3 py-3 text-slate-300">
+                            {item.toko || "-"}
+                          </td>
+                          <td className="px-3 py-3 text-right font-mono text-emerald-300">
+                            Rp{" "}
+                            {Number(item.nominal || 0).toLocaleString("id-ID")}
+                          </td>
+                          <td className="px-3 py-3 text-slate-300">
+                            {item.deadline || "-"}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              ) : (
-                <div className="mt-5 rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-slate-400">
-                  Baca-saja: role ini tidak bisa memproses Claim.
+              </Panel>
+              <Panel title="Form Validasi Claim" icon={ClipboardCheck}>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <DateField
+                    label="Tanggal Diajukan"
+                    value={claimSubmittedDate}
+                    onChange={setClaimSubmittedDate}
+                  />
+                  <DateField
+                    label="Deadline Claim"
+                    value={claimDeadline}
+                    onChange={setClaimDeadline}
+                  />
+                  <label className="block">
+                    <span className="text-xs text-slate-500 font-semibold">
+                      Status Kelengkapan Claim
+                    </span>
+                    <select
+                      value={completenessStatus}
+                      onChange={(event) =>
+                        setCompletenessStatus(event.target.value)
+                      }
+                      className="mt-1 w-full rounded-lg border border-white/10 bg-black/40 px-3 py-2.5 text-sm text-slate-200 outline-none focus:border-teal-500/50"
+                    >
+                      <option className="bg-[#1a1c23]" value="Aman">
+                        Aman
+                      </option>
+                      <option className="bg-[#1a1c23]" value="Kurang">
+                        Kurang
+                      </option>
+                      <option className="bg-[#1a1c23]" value="Perlu Revisi">
+                        Perlu Revisi
+                      </option>
+                    </select>
+                  </label>
                 </div>
-              )}
-            </Panel>
-          </div>
-        </div>
+                <div className="mt-4">
+                  <label className="block">
+                    <span className="text-xs text-slate-500 font-semibold">
+                      Catatan Claim
+                    </span>
+                    <textarea
+                      value={claimNote}
+                      onChange={(event) => setClaimNote(event.target.value)}
+                      rows={4}
+                      className="mt-1 w-full resize-none rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-teal-500/50"
+                    />
+                  </label>
+                </div>
+                {claimMessage && (
+                  <div className="mt-4 rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-slate-300">
+                    {claimMessage}
+                  </div>
+                )}
+                {canReviewClaim && isClaimQueueBatch(selectedBatch) ? (
+                  <div className="mt-5 flex flex-wrap gap-3">
+                    <button
+                      onClick={returnByClaim}
+                      disabled={isActionLoading}
+                      className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-2.5 text-sm font-bold text-rose-300 disabled:opacity-50"
+                    >
+                      Kembalikan untuk Koreksi
+                    </button>
+                    <button
+                      onClick={approveByClaim}
+                      disabled={isActionLoading}
+                      className="rounded-xl border border-emerald-500 bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white disabled:opacity-50"
+                    >
+                      Setujui Claim
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mt-5 rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-slate-400">
+                    Baca-saja atau batch sudah diproses.
+                  </div>
+                )}
+              </Panel>
+            </div>
+          )}
+        </>
       )}
 
       {claimView === "after-finance" && (
-        <div className="grid grid-cols-1 xl:grid-cols-[0.75fr_1.25fr] gap-6">
-          <Panel
-            title="Menunggu Verifikasi Final Setelah Pembayaran"
-            icon={Wallet}
-          >
+        <>
+          <Panel title="Monitoring Final Claim" icon={Wallet}>
+            <p className="mb-4 text-sm text-slate-400">
+              Lihat data yang menunggu verifikasi final dan data yang sudah
+              diproses Claim Final.
+            </p>
             <div className="mb-4">
               <MonitoringSearch
                 value={finalClaimSearch}
@@ -4186,457 +4066,531 @@ function ClaimDashboard({ offRole }: OffDashboardProps) {
                 placeholder="Cari No Pengajuan, principle, kode, status pembayaran, atau No Surat..."
               />
             </div>
-            <div className="space-y-3">
-              {isLoading && (
-                <p className="text-sm text-slate-400">
-                  Memuat antrean final Claim...
-                </p>
-              )}
-              {!isLoading && filteredFinalBatches.length === 0 && (
-                <p className="text-sm text-slate-400">
-                  Belum ada batch sudah dibayar yang menunggu verifikasi final.
-                </p>
-              )}
-              {filteredFinalBatches.map((batch) => {
-                const batchSummary = batch.summary || { totalNominal: 0 };
-                const batchPaymentSummary = batch.paymentSummary || {
-                  totalPaid: Number(batch.paidAmount || 0),
-                  remainingAmount: Math.max(
-                    0,
-                    Number(batchSummary.totalNominal || 0) -
-                      Number(batch.paidAmount || 0),
-                  ),
-                };
-                return (
-                  <button
-                    key={batch.id}
-                    onClick={() => selectFinalBatch(batch)}
-                    className={`w-full rounded-xl border p-4 text-left transition-colors ${selectedFinalBatch?.id === batch.id ? "border-teal-500/40 bg-teal-500/10" : "border-white/10 bg-black/30 hover:bg-white/[0.04]"}`}
-                  >
-                    <p className="font-mono text-sm font-bold text-white">
-                      {batch.noPengajuan}
-                    </p>
-                    <p className="mt-1 text-sm text-slate-300">
-                      {batch.principleName}{" "}
-                      <span className="font-mono text-teal-300">
-                        ({batch.principleCode})
-                      </span>
-                    </p>
-                    <div className="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-400">
-                      <span>
-                        No Claim:{" "}
-                        <b className="text-slate-200">{batch.noClaim || "-"}</b>
-                      </span>
-                      <span>
-                        Total:{" "}
-                        <b className="text-emerald-300">
-                          Rp{" "}
-                          {Number(
-                            batchSummary.totalNominal || 0,
-                          ).toLocaleString("id-ID")}
-                        </b>
-                      </span>
-                      <span>
-                        Dibayar:{" "}
-                        <b className="text-emerald-300">
-                          Rp{" "}
-                          {Number(
-                            batchPaymentSummary.totalPaid || 0,
-                          ).toLocaleString("id-ID")}
-                        </b>
-                      </span>
-                      <span>
-                        Sisa:{" "}
-                        <b className="text-amber-300">
-                          Rp{" "}
-                          {Number(
-                            batchPaymentSummary.remainingAmount || 0,
-                          ).toLocaleString("id-ID")}
-                        </b>
-                      </span>
-                      <span>
-                        Tgl Bayar:{" "}
-                        <b className="text-slate-200">
-                          {formatDateDisplay(batch.paymentDate)}
-                        </b>
-                      </span>
-                      <span>
-                        Keuangan:{" "}
-                        <b className="text-sky-300">
-                          {displayStatusLabel(batch.financeStatus)}
-                        </b>
-                      </span>
-                      <span>
-                        Final:{" "}
-                        <b className="text-purple-300">
-                          {displayStatusLabel(batch.finalStatus)}
-                        </b>
-                      </span>
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-            <div className="mt-6 border-t border-white/10 pt-5">
-              <p className="mb-3 text-sm font-bold text-white">
-                Riwayat Final Claim
-              </p>
-              <div className="space-y-2">
-                {finalHistory.slice(0, 5).map((batch) => (
-                  <div
-                    key={batch.id}
-                    className="rounded-lg border border-white/10 bg-black/20 p-3"
-                  >
-                    <p className="font-mono text-xs font-bold text-slate-200">
-                      {batch.noPengajuan}
-                    </p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      {batch.principleCode} - {batch.principleName}
-                    </p>
-                    <span
-                      className={`mt-2 inline-flex rounded-md border px-2 py-1 text-xs font-bold ${statusClass(batch.finalStatus)}`}
-                    >
-                      {displayStatusLabel(batch.finalStatus)}
-                    </span>
-                  </div>
-                ))}
-                {finalHistory.length === 0 && (
-                  <p className="text-sm text-slate-500">
-                    Belum ada riwayat final Claim.
-                  </p>
-                )}
-              </div>
-            </div>
-          </Panel>
-
-          <div className="space-y-6">
-            <Panel title="Detail Final Claim" icon={ListChecks}>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                <Field
-                  label="No Pengajuan"
-                  value={selectedFinalBatch?.noPengajuan || "-"}
-                />
-                <Field
-                  label="Principle"
-                  value={selectedFinalBatch?.principleName || "-"}
-                />
-                <Field
-                  label="Kode Principle"
-                  value={selectedFinalBatch?.principleCode || "-"}
-                />
-                <Field
-                  label="No Claim"
-                  value={selectedFinalBatch?.noClaim || "-"}
-                />
-                <Field
-                  label="Tanggal Diajukan Claim"
-                  value={formatDateDisplay(
-                    selectedFinalBatch?.claimSubmittedDate,
-                  )}
-                />
-                <Field
-                  label="Deadline Claim"
-                  value={formatDateDisplay(selectedFinalBatch?.claimDeadline)}
-                />
-                <Field
-                  label="Total Nominal"
-                  value={`Rp ${finalTotalNominal.toLocaleString("id-ID")}`}
-                />
-                <Field
-                  label="Status SM"
-                  value={displayStatusLabel(selectedFinalBatch?.smStatus)}
-                />
-                <Field
-                  label="Status Claim"
-                  value={displayStatusLabel(selectedFinalBatch?.claimStatus)}
-                />
-                <Field
-                  label="Status OM"
-                  value={displayStatusLabel(selectedFinalBatch?.omStatus)}
-                />
-                <Field
-                  label="Status Keuangan"
-                  value={displayStatusLabel(selectedFinalBatch?.financeStatus)}
-                />
-                <Field
-                  label="Status Final"
-                  value={displayStatusLabel(selectedFinalBatch?.finalStatus)}
-                />
-              </div>
-            </Panel>
-
-            <Panel title="Riwayat Pembayaran dari Keuangan" icon={Wallet}>
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                <Field
-                  label="Tanggal Bayar"
-                  value={formatDateDisplay(selectedFinalBatch?.paymentDate)}
-                />
-                <Field
-                  label="Total Pengajuan"
-                  value={`Rp ${finalTotalNominal.toLocaleString("id-ID")}`}
-                />
-                <Field
-                  label="Total Dibayar Keuangan"
-                  value={`Rp ${paidAmount.toLocaleString("id-ID")}`}
-                />
-                <Field
-                  label="Sisa Pembayaran"
-                  value={`Rp ${remainingFinalAmount.toLocaleString("id-ID")}`}
-                />
-                <Field
-                  label="Jumlah Pembayaran"
-                  value={`${selectedFinalPayments.length} pembayaran`}
-                />
-              </div>
-              <div className="mt-4">
-                <TextArea
-                  label="Catatan Keuangan"
-                  value={selectedFinalBatch?.financeNote || "-"}
-                />
-              </div>
-              <div className="mt-5 overflow-x-auto rounded-xl border border-white/10">
-                <table className="w-full min-w-[900px] text-left text-sm">
-                  <thead className="border-b border-white/10 bg-black/50 text-xs uppercase tracking-wider text-slate-500">
-                    <tr>
-                      {[
-                        "No Pembayaran",
-                        "Tanggal Bayar",
-                        "Metode",
-                        "Jumlah",
-                        "Bank Pengirim",
-                        "Bukti Pembayaran",
-                        "Catatan",
-                      ].map((header) => (
-                        <th key={header} className="px-3 py-3 font-bold">
-                          {header}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5">
-                    {selectedFinalPayments.map((payment) => (
-                      <tr key={payment.id} className="hover:bg-white/[0.03]">
-                        <td className="px-3 py-3 font-mono text-slate-300">
-                          {payment.paymentNo}
+            <div className="overflow-x-auto rounded-xl border border-white/10">
+              <table className="w-full min-w-[1200px] text-left text-sm">
+                <thead className="bg-black/50 text-xs uppercase tracking-wider text-slate-500">
+                  <tr>
+                    {[
+                      "No Pengajuan",
+                      "Principle",
+                      "Kode Principle",
+                      "Total Nominal",
+                      "Status Finance",
+                      "Status Final",
+                      "Progress %",
+                      "Final Claim Note",
+                      "Updated At",
+                      "Aksi",
+                    ].map((header) => (
+                      <th key={header} className="px-3 py-3 font-bold">
+                        {header}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {finalClaimMonitoringBatches.map((batch) => {
+                    const canProcessFinal = isFinalClaimProcessable(batch);
+                    return (
+                      <tr key={batch.id} className="hover:bg-white/[0.03]">
+                        <td className="px-3 py-3 font-mono text-slate-200">
+                          {batch.noPengajuan}
                         </td>
                         <td className="px-3 py-3 text-slate-300">
-                          {formatDateDisplay(payment.paymentDate)}
+                          {batch.principleName}
                         </td>
-                        <td className="px-3 py-3 text-slate-300">
-                          {payment.paymentMethod}
+                        <td className="px-3 py-3 font-mono text-teal-300">
+                          {batch.principleCode}
                         </td>
                         <td className="px-3 py-3 text-right font-mono text-emerald-300">
                           Rp{" "}
-                          {Number(payment.paidAmount || 0).toLocaleString(
-                            "id-ID",
-                          )}
+                          {Number(
+                            batch.summary?.totalNominal || 0,
+                          ).toLocaleString("id-ID")}
                         </td>
                         <td className="px-3 py-3 text-slate-300">
-                          {payment.senderBank || "-"}
+                          {displayStatusLabel(batch.financeStatus)}
+                        </td>
+                        <td className="px-3 py-3 text-slate-300">
+                          {displayStatusLabel(batch.finalStatus)}
+                        </td>
+                        <td className="px-3 py-3 min-w-[130px]">
+                          <ProgressBar value={computeUiBatchProgress(batch)} />
+                        </td>
+                        <td className="px-3 py-3 text-slate-400">
+                          {batch.finalClaimNote || "-"}
+                        </td>
+                        <td className="px-3 py-3 text-slate-400">
+                          {formatDateDisplay(batch.updatedAt)}
                         </td>
                         <td className="px-3 py-3">
-                          <div className="min-w-[180px] space-y-2">
-                            <p className="font-mono text-xs text-slate-300">
-                              {payment.paymentProofName || "-"}
-                            </p>
-                            {payment.proofUrl && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  window.open(payment.proofUrl || "", "_blank")
-                                }
-                                className="rounded-lg border border-teal-500/30 bg-teal-500/10 px-2 py-1 text-xs font-bold text-teal-300 hover:bg-teal-500/20"
-                              >
-                                Lihat Bukti
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-3 py-3 text-slate-300">
-                          {payment.note || "-"}
+                          <button
+                            onClick={() => selectFinalBatch(batch)}
+                            className={`rounded-lg border px-3 py-1.5 text-xs font-bold ${canProcessFinal ? "border-teal-500 bg-teal-600 text-white hover:bg-teal-500" : "border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"}`}
+                          >
+                            {canProcessFinal ? "Proses Final" : "Lihat"}
+                          </button>
                         </td>
                       </tr>
-                    ))}
-                    {!isLoading && selectedFinalPayments.length === 0 && (
-                      <tr>
-                        <td
-                          colSpan={7}
-                          className="px-3 py-6 text-center text-sm text-slate-500"
-                        >
-                          Belum ada riwayat pembayaran.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            </Panel>
-
-            <Panel title="Item Batch Verifikasi Final" icon={ReceiptText}>
-              <div className="overflow-x-auto rounded-xl border border-white/10">
-                <table className="w-full min-w-[1250px] text-sm text-left">
-                  <thead className="bg-black/50 text-xs uppercase tracking-wider text-slate-500 border-b border-white/10">
+                    );
+                  })}
+                  {!isLoading && finalClaimMonitoringBatches.length === 0 && (
                     <tr>
-                      {[
-                        "No",
-                        "No Surat",
-                        "No Claim",
-                        "Nama Program",
-                        "Periode Awal",
-                        "Periode Akhir",
-                        "Toko",
-                        "Barang",
-                        "Nominal",
-                        "Cara Bayar",
-                        "Tipe",
-                        "Deadline",
-                      ].map((header) => (
-                        <th key={header} className="px-3 py-3 font-bold">
-                          {header}
-                        </th>
-                      ))}
+                      <td
+                        colSpan={10}
+                        className="px-3 py-6 text-center text-sm text-slate-500"
+                      >
+                        Belum ada data final Claim untuk ditampilkan.
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y divide-white/5">
-                    {selectedFinalItems.map((item, index) => {
-                      const period = splitPeriodDates(item.periode);
-                      return (
-                        <tr
-                          key={item.id || `${item.noSurat}-${index}`}
-                          className="hover:bg-white/[0.03]"
-                        >
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </Panel>
+
+          {selectedFinalBatch && (
+            <div className="space-y-6">
+              <div className="flex justify-end">
+                <button
+                  onClick={() => {
+                    setSelectedFinalBatch(null);
+                    setSelectedFinalItems([]);
+                    setSelectedFinalPayments([]);
+                    setFinalClaimRefs({});
+                    setFinalChecklist({});
+                    setFinalClaimNote("");
+                  }}
+                  className="rounded-xl border border-white/10 bg-white/5 px-4 py-2 text-sm font-bold text-slate-200 hover:bg-white/10"
+                >
+                  Tutup Detail
+                </button>
+              </div>
+              <Panel title="Detail Final Claim" icon={ListChecks}>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                  <Field
+                    label="No Pengajuan"
+                    value={selectedFinalBatch?.noPengajuan || "-"}
+                  />
+                  <Field
+                    label="Principle"
+                    value={selectedFinalBatch?.principleName || "-"}
+                  />
+                  <Field
+                    label="Kode Principle"
+                    value={selectedFinalBatch?.principleCode || "-"}
+                  />
+                  <Field
+                    label="No Claim"
+                    value={selectedFinalBatch?.noClaim || "-"}
+                  />
+                  <Field
+                    label="Tanggal Diajukan Claim"
+                    value={formatDateDisplay(
+                      selectedFinalBatch?.claimSubmittedDate,
+                    )}
+                  />
+                  <Field
+                    label="Deadline Claim"
+                    value={formatDateDisplay(selectedFinalBatch?.claimDeadline)}
+                  />
+                  <Field
+                    label="Total Nominal"
+                    value={`Rp ${finalTotalNominal.toLocaleString("id-ID")}`}
+                  />
+                  <Field
+                    label="Status SM"
+                    value={displayStatusLabel(selectedFinalBatch?.smStatus)}
+                  />
+                  <Field
+                    label="Status Claim"
+                    value={displayStatusLabel(selectedFinalBatch?.claimStatus)}
+                  />
+                  <Field
+                    label="Status OM"
+                    value={displayStatusLabel(selectedFinalBatch?.omStatus)}
+                  />
+                  <Field
+                    label="Status Keuangan"
+                    value={displayStatusLabel(
+                      selectedFinalBatch?.financeStatus,
+                    )}
+                  />
+                  <Field
+                    label="Status Final"
+                    value={displayStatusLabel(selectedFinalBatch?.finalStatus)}
+                  />
+                </div>
+              </Panel>
+
+              <Panel title="Riwayat Pembayaran dari Keuangan" icon={Wallet}>
+                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                  <Field
+                    label="Tanggal Bayar"
+                    value={formatDateDisplay(selectedFinalBatch?.paymentDate)}
+                  />
+                  <Field
+                    label="Total Pengajuan"
+                    value={`Rp ${finalTotalNominal.toLocaleString("id-ID")}`}
+                  />
+                  <Field
+                    label="Total Dibayar Keuangan"
+                    value={`Rp ${paidAmount.toLocaleString("id-ID")}`}
+                  />
+                  <Field
+                    label="Sisa Pembayaran"
+                    value={`Rp ${remainingFinalAmount.toLocaleString("id-ID")}`}
+                  />
+                  <Field
+                    label="Jumlah Pembayaran"
+                    value={`${selectedFinalPayments.length} pembayaran`}
+                  />
+                </div>
+                <div className="mt-4">
+                  <TextArea
+                    label="Catatan Keuangan"
+                    value={selectedFinalBatch?.financeNote || "-"}
+                  />
+                </div>
+                <div className="mt-5 overflow-x-auto rounded-xl border border-white/10">
+                  <table className="w-full min-w-[900px] text-left text-sm">
+                    <thead className="border-b border-white/10 bg-black/50 text-xs uppercase tracking-wider text-slate-500">
+                      <tr>
+                        {[
+                          "No Pembayaran",
+                          "Tanggal Bayar",
+                          "Metode",
+                          "Jumlah",
+                          "Bank Pengirim",
+                          "Bukti Pembayaran",
+                          "Catatan",
+                        ].map((header) => (
+                          <th key={header} className="px-3 py-3 font-bold">
+                            {header}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {selectedFinalPayments.map((payment) => (
+                        <tr key={payment.id} className="hover:bg-white/[0.03]">
                           <td className="px-3 py-3 font-mono text-slate-300">
-                            {item.itemNo || index + 1}
-                          </td>
-                          <td className="px-3 py-3 font-mono text-slate-200">
-                            {item.noSurat || "-"}
-                          </td>
-                          <td className="px-3 py-3">
-                            <input
-                              value={finalClaimRefs[item.id] || ""}
-                              onChange={(event) =>
-                                setFinalClaimRefs((current) => ({
-                                  ...current,
-                                  [item.id]: event.target.value,
-                                }))
-                              }
-                              placeholder="Isi No Claim"
-                              className="w-full min-w-[160px] rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm font-mono text-slate-200 outline-none placeholder:text-slate-600 focus:border-teal-500/50"
-                            />
-                          </td>
-                          <td className="px-3 py-3 min-w-[180px] text-slate-200">
-                            {item.namaProgram || "-"}
+                            {payment.paymentNo}
                           </td>
                           <td className="px-3 py-3 text-slate-300">
-                            {formatDateDisplay(period.periodeAwal)}
+                            {formatDateDisplay(payment.paymentDate)}
                           </td>
                           <td className="px-3 py-3 text-slate-300">
-                            {formatDateDisplay(period.periodeAkhir)}
-                          </td>
-                          <td className="px-3 py-3 min-w-[140px] text-slate-300">
-                            {item.toko || "-"}
-                          </td>
-                          <td className="px-3 py-3 text-slate-300">
-                            {item.barang || "-"}
+                            {payment.paymentMethod}
                           </td>
                           <td className="px-3 py-3 text-right font-mono text-emerald-300">
                             Rp{" "}
-                            {Number(item.nominal || 0).toLocaleString("id-ID")}
+                            {Number(payment.paidAmount || 0).toLocaleString(
+                              "id-ID",
+                            )}
                           </td>
                           <td className="px-3 py-3 text-slate-300">
-                            {item.caraBayar || "-"}
+                            {payment.senderBank || "-"}
+                          </td>
+                          <td className="px-3 py-3">
+                            <div className="min-w-[180px] space-y-2">
+                              <p className="font-mono text-xs text-slate-300">
+                                {payment.paymentProofName || "-"}
+                              </p>
+                              {payment.proofUrl && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    window.open(
+                                      payment.proofUrl || "",
+                                      "_blank",
+                                    )
+                                  }
+                                  className="rounded-lg border border-teal-500/30 bg-teal-500/10 px-2 py-1 text-xs font-bold text-teal-300 hover:bg-teal-500/20"
+                                >
+                                  Lihat Bukti
+                                </button>
+                              )}
+                            </div>
                           </td>
                           <td className="px-3 py-3 text-slate-300">
-                            {item.type || "-"}
-                          </td>
-                          <td className="px-3 py-3 text-slate-300">
-                            {formatDateDisplay(item.deadline)}
+                            {payment.note || "-"}
                           </td>
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </Panel>
+                      ))}
+                      {!isLoading && selectedFinalPayments.length === 0 && (
+                        <tr>
+                          <td
+                            colSpan={7}
+                            className="px-3 py-6 text-center text-sm text-slate-500"
+                          >
+                            Belum ada riwayat pembayaran.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </Panel>
 
-            <Panel title="Ringkasan Pembayaran Final" icon={ReceiptText}>
-              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
-                <Field
-                  label="Total Nominal"
-                  value={`Rp ${finalTotalNominal.toLocaleString("id-ID")}`}
-                />
-                <Field
-                  label="Transfer"
-                  value={`Rp ${finalTransfer.toLocaleString("id-ID")}`}
-                />
-                <Field
-                  label="Tunai"
-                  value={`Rp ${finalTunai.toLocaleString("id-ID")}`}
-                />
-                <Field
-                  label="Jumlah Dibayar Keuangan"
-                  value={`Rp ${paidAmount.toLocaleString("id-ID")}`}
-                />
-                <Field
-                  label="Sisa Pembayaran"
-                  value={`Rp ${remainingFinalAmount.toLocaleString("id-ID")}`}
-                />
-              </div>
-            </Panel>
+              <Panel title="Item Batch Verifikasi Final" icon={ReceiptText}>
+                <div className="overflow-x-auto rounded-xl border border-white/10">
+                  <table className="w-full min-w-[1900px] text-sm text-left">
+                    <thead className="bg-black/50 text-xs uppercase tracking-wider text-slate-500 border-b border-white/10">
+                      <tr>
+                        {[
+                          "No",
+                          "No Surat",
+                          "No Claim",
+                          "Checklist Final",
+                          "Others Text",
+                          "Catatan Kelengkapan Final",
+                          "Nama Program",
+                          "Periode Awal",
+                          "Periode Akhir",
+                          "Toko",
+                          "Barang",
+                          "Nominal",
+                          "Cara Bayar",
+                          "Tipe",
+                          "Deadline",
+                        ].map((header) => (
+                          <th key={header} className="px-3 py-3 font-bold">
+                            {header}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {selectedFinalItems.map((item, index) => {
+                        const period = splitPeriodDates(item.periode);
+                        const checklist = finalChecklist[item.id] || {
+                          finalKwt: false,
+                          finalSkp: false,
+                          finalFp: false,
+                          finalPc: false,
+                          finalFoto: false,
+                          finalRekap: false,
+                          finalOthers: false,
+                          finalOthersText: "",
+                          finalCompletenessNote: "",
+                        };
+                        const updateChecklist = (
+                          patch: Partial<typeof checklist>,
+                        ) => {
+                          setFinalChecklist((current) => ({
+                            ...current,
+                            [item.id]: {
+                              ...checklist,
+                              ...current[item.id],
+                              ...patch,
+                            },
+                          }));
+                        };
+                        return (
+                          <tr
+                            key={item.id || `${item.noSurat}-${index}`}
+                            className="hover:bg-white/[0.03]"
+                          >
+                            <td className="px-3 py-3 font-mono text-slate-300">
+                              {item.itemNo || index + 1}
+                            </td>
+                            <td className="px-3 py-3 font-mono text-slate-200">
+                              {item.noSurat || "-"}
+                            </td>
+                            <td className="px-3 py-3">
+                              <input
+                                value={finalClaimRefs[item.id] || ""}
+                                onChange={(event) =>
+                                  setFinalClaimRefs((current) => ({
+                                    ...current,
+                                    [item.id]: event.target.value,
+                                  }))
+                                }
+                                placeholder="Isi No Claim"
+                                className="w-full min-w-[160px] rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm font-mono text-slate-200 outline-none placeholder:text-slate-600 focus:border-teal-500/50"
+                              />
+                            </td>
+                            <td className="px-3 py-3 min-w-[300px]">
+                              <div className="grid grid-cols-4 gap-2 text-xs text-slate-300">
+                                {[
+                                  ["finalKwt", "KWT"],
+                                  ["finalSkp", "SKP"],
+                                  ["finalFp", "FP"],
+                                  ["finalPc", "PC"],
+                                  ["finalFoto", "Foto"],
+                                  ["finalRekap", "Rekap"],
+                                  ["finalOthers", "Others"],
+                                ].map(([key, label]) => (
+                                  <label
+                                    key={key}
+                                    className="inline-flex items-center gap-1.5"
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={Boolean(
+                                        checklist[
+                                          key as keyof typeof checklist
+                                        ],
+                                      )}
+                                      onChange={(event) =>
+                                        updateChecklist({
+                                          [key]: event.target.checked,
+                                        } as Partial<typeof checklist>)
+                                      }
+                                      className="h-4 w-4 rounded border-white/20 bg-black/40 accent-teal-500"
+                                    />
+                                    {label}
+                                  </label>
+                                ))}
+                              </div>
+                            </td>
+                            <td className="px-3 py-3">
+                              <input
+                                value={checklist.finalOthersText || ""}
+                                onChange={(event) =>
+                                  updateChecklist({
+                                    finalOthersText: event.target.value,
+                                  })
+                                }
+                                disabled={!checklist.finalOthers}
+                                placeholder="Jika Others dicentang"
+                                className="w-full min-w-[180px] rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-teal-500/50 disabled:opacity-50"
+                              />
+                            </td>
+                            <td className="px-3 py-3">
+                              <textarea
+                                value={checklist.finalCompletenessNote || ""}
+                                onChange={(event) =>
+                                  updateChecklist({
+                                    finalCompletenessNote: event.target.value,
+                                  })
+                                }
+                                rows={2}
+                                placeholder="Catatan per item"
+                                className="w-full min-w-[220px] resize-none rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-teal-500/50"
+                              />
+                            </td>
+                            <td className="px-3 py-3 min-w-[180px] text-slate-200">
+                              {item.namaProgram || "-"}
+                            </td>
+                            <td className="px-3 py-3 text-slate-300">
+                              {formatDateDisplay(period.periodeAwal)}
+                            </td>
+                            <td className="px-3 py-3 text-slate-300">
+                              {formatDateDisplay(period.periodeAkhir)}
+                            </td>
+                            <td className="px-3 py-3 min-w-[140px] text-slate-300">
+                              {item.toko || "-"}
+                            </td>
+                            <td className="px-3 py-3 text-slate-300">
+                              {item.barang || "-"}
+                            </td>
+                            <td className="px-3 py-3 text-right font-mono text-emerald-300">
+                              Rp{" "}
+                              {Number(item.nominal || 0).toLocaleString(
+                                "id-ID",
+                              )}
+                            </td>
+                            <td className="px-3 py-3 text-slate-300">
+                              {item.caraBayar || "-"}
+                            </td>
+                            <td className="px-3 py-3 text-slate-300">
+                              {item.type || "-"}
+                            </td>
+                            <td className="px-3 py-3 text-slate-300">
+                              {formatDateDisplay(item.deadline)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </Panel>
 
-            <Panel title="Form Verifikasi Final Claim" icon={ClipboardCheck}>
-              <InfoNote>
-                Claim mengecek bukti pembayaran, kesesuaian total pembayaran,
-                dan mengisi No Claim per No Surat. Jika kelengkapan belum
-                lengkap, gunakan pengingat web untuk SM & SPV. Jika sesuai,
-                selesaikan pengajuan.
-              </InfoNote>
-              <div className="mt-4">
-                <label className="block">
-                  <span className="text-xs text-slate-500 font-semibold">
-                    Catatan Final Claim
-                  </span>
-                  <textarea
-                    value={finalClaimNote}
-                    onChange={(event) => setFinalClaimNote(event.target.value)}
-                    rows={4}
-                    className="mt-1 w-full resize-none rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-teal-500/50"
+              <Panel title="Ringkasan Pembayaran Final" icon={ReceiptText}>
+                <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-5 gap-3">
+                  <Field
+                    label="Total Nominal"
+                    value={`Rp ${finalTotalNominal.toLocaleString("id-ID")}`}
                   />
-                </label>
-              </div>
+                  <Field
+                    label="Transfer"
+                    value={`Rp ${finalTransfer.toLocaleString("id-ID")}`}
+                  />
+                  <Field
+                    label="Tunai"
+                    value={`Rp ${finalTunai.toLocaleString("id-ID")}`}
+                  />
+                  <Field
+                    label="Jumlah Dibayar Keuangan"
+                    value={`Rp ${paidAmount.toLocaleString("id-ID")}`}
+                  />
+                  <Field
+                    label="Sisa Pembayaran"
+                    value={`Rp ${remainingFinalAmount.toLocaleString("id-ID")}`}
+                  />
+                </div>
+              </Panel>
 
-              {claimMessage && (
-                <div className="mt-4 rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-slate-300">
-                  {claimMessage}
+              <Panel title="Form Verifikasi Final Claim" icon={ClipboardCheck}>
+                <InfoNote>
+                  Claim mengecek bukti pembayaran, kesesuaian total pembayaran,
+                  dan mengisi No Claim per No Surat. Jika kelengkapan belum
+                  lengkap, gunakan pengingat web untuk SM & SPV. Jika sesuai,
+                  selesaikan pengajuan.
+                </InfoNote>
+                <div className="mt-4">
+                  <label className="block">
+                    <span className="text-xs text-slate-500 font-semibold">
+                      Catatan Final Claim
+                    </span>
+                    <textarea
+                      value={finalClaimNote}
+                      onChange={(event) =>
+                        setFinalClaimNote(event.target.value)
+                      }
+                      rows={4}
+                      className="mt-1 w-full resize-none rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-sm text-slate-200 outline-none placeholder:text-slate-600 focus:border-teal-500/50"
+                    />
+                  </label>
                 </div>
-              )}
 
-              {canFinalClaim ? (
-                <div className="mt-5 flex flex-wrap gap-3">
-                  <button
-                    onClick={remindIncompleteDocuments}
-                    disabled={!selectedFinalBatch || isActionLoading}
-                    className="inline-flex items-center justify-center rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm font-bold text-amber-300 hover:bg-amber-500/20 disabled:opacity-50"
-                  >
-                    Ingatkan SM & SPV kelengkapan belum lengkap
-                  </button>
-                  <button
-                    onClick={completeFinalClaim}
-                    disabled={!selectedFinalBatch || isActionLoading}
-                    className="inline-flex items-center justify-center rounded-xl border border-emerald-500 bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
-                  >
-                    Selesaikan
-                  </button>
-                </div>
-              ) : (
-                <div className="mt-5 rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-slate-400">
-                  Baca-saja: role ini tidak bisa memproses final Claim.
-                </div>
-              )}
-            </Panel>
-          </div>
-        </div>
+                {claimMessage && (
+                  <div className="mt-4 rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-slate-300">
+                    {claimMessage}
+                  </div>
+                )}
+
+                {canFinalClaim &&
+                selectedFinalBatch &&
+                isFinalClaimProcessable(selectedFinalBatch) ? (
+                  <div className="mt-5 flex flex-wrap gap-3">
+                    <button
+                      onClick={remindIncompleteDocuments}
+                      disabled={!selectedFinalBatch || isActionLoading}
+                      className="inline-flex items-center justify-center rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-2.5 text-sm font-bold text-amber-300 hover:bg-amber-500/20 disabled:opacity-50"
+                    >
+                      Ingatkan SM & SPV kelengkapan belum lengkap
+                    </button>
+                    <button
+                      onClick={completeFinalClaim}
+                      disabled={!selectedFinalBatch || isActionLoading}
+                      className="inline-flex items-center justify-center rounded-xl border border-emerald-500 bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+                    >
+                      Selesaikan
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mt-5 rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-sm text-slate-400">
+                    Baca-saja: role ini tidak bisa memproses final Claim.
+                  </div>
+                )}
+              </Panel>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
